@@ -1,151 +1,246 @@
-# TỔNG HỢP KIẾN THỨC VÀ HƯỚNG DẪN NGHIÊN CỨU DỰ ÁN
-## Spiking-TIM-Net: Nhận dạng Cảm xúc Giọng nói (Speech Emotion Recognition - SER)
+# BÁO CÁO TOÀN DIỆN VỀ KIẾN TRÚC VÀ CƠ CHẾ HOẠT ĐỘNG CỦA MÔ HÌNH
+# SPIKING-TIM-NET (SPEECH EMOTION RECOGNITION)
 
-> Tài liệu này được biên soạn nhằm tổng hợp toàn bộ lý thuyết cốt lõi, kiến trúc mô hình, kỹ thuật cải tiến nơ-ron xung (LIF SNN) và các lưu ý thực nghiệm phục vụ việc học tập, báo cáo và bảo vệ đồ án/luận văn.
-
----
-
-## MỤC LỤC
-1. [Tổng quan về bài toán & Mô hình gốc TIM-Net](#1-tổng-quan-về-bài-toán--mô-hình-gốc-tim-net)
-2. [Chi tiết Kiến trúc Mô hình (End-to-End)](#2-chi-tiết-kiến-trúc-mô-hình-end-to-end)
-3. [Điểm mới: Cải tiến Nơ-ron xung LIF (Spiking Attention at F)](#3-điểm-mới-cải-tiến-nơ-ron-xung-lif-spiking-attention-at-f)
-4. [Các chỉ số đánh giá kết quả (Evaluation Metrics)](#4-các-chỉ-số-đánh-giá-kết-quả-evaluation-metrics)
-5. [Cẩm nang kỹ thuật & Xử lý lỗi khi train trên Server](#5-cẩm-nang-kỹ-thuật--xử-lý-lỗi-khi-train-trên-server)
-6. [Lệnh chạy thực nghiệm đối chứng (Benchmark)](#6-lệnh-chạy-thực-nghiệm-đối-chứng-benchmark)
+> **Tài liệu học tập & Nghiên cứu chuyên sâu**  
+> **Đề tài:** Nhận dạng Cảm xúc Tiếng nói sử dụng mạng Mẫu hình Thời gian Hai chiều Đa thang đo kết hợp Cơ chế Nơ-ron Xung Sinh học (Spiking-TIM-Net).  
+> **Tác giả:** ThanhBinngoc  
 
 ---
 
-## 1. TỔNG QUAN VỀ BÀI TOÁN & MÔ HÌNH GỐC TIM-NET
-
-### 1.1. Bài toán SER (Speech Emotion Recognition)
-* **Mục tiêu:** Phân loại trạng thái cảm xúc của con người từ tín hiệu tiếng nói (ví dụ tập **RAVDESS** gồm 8 cảm xúc: *Angry, Calm, Disgust, Fear, Happy, Neutral, Sad, Surprise*).
-* **Thách thức:** Cảm xúc trong lời nói phân bố ở nhiều khoảng thời gian khác nhau (từ âm vị ngắn đến cả câu nói dài) và dễ bị ảnh hưởng bởi tạp âm, khoảng lặng, tiếng thở.
-
-### 1.2. Mô hình gốc TIM-Net (ICASSP 2023)
-* **Tên gọi:** **T**emporal-aware b**I**-direction **M**ulti-scale **Net**work.
-* **Đặc điểm nổi bật:**
-  * **Siêu nhẹ (Lightweight):** Chỉ ~**0.40 MB** (~100.000 tham số), nhỏ hơn rất nhiều so với các mô hình trước đó (CPAC: 1.23 MB, GM-TCN: 1.13 MB).
-  * **Hai chiều (Bi-direction):** Xử lý đồng thời cả luồng thời gian xuôi (Forward) và đảo ngược (Backward) để nắm bắt cả ngữ cảnh quá khứ lẫn tương lai.
-  * **Đa thang đo (Multi-scale):** Sử dụng các khối tích chập giãn nở với hệ số tăng theo lũy thừa ($2^0, 2^1, \dots, 2^7$) để bao quát từ âm tiết ngắn đến toàn bộ câu nói.
+## MỤC LỤC CHI TIẾT
+1. [Bức tranh Tổng thể & Luồng Dữ liệu (End-to-End Data Flow)](#1-bức-tranh-tổng-thể--luồng-dữ-liệu-end-to-end-data-flow)
+2. [Giai đoạn 1: Input Pipeline & Trích xuất Đặc trưng MFCC](#2-giai-đoạn-1-input-pipeline--trích-xuất-đặc-trưng-mfcc)
+3. [Giai đoạn 2: Tách Hai Luồng Thời Gian Xuôi - Ngược (Bi-directional Stream)](#3-giai-đoạn-2-tách-hai-luồng-thời-gian-xuôi---ngược-bi-directional-stream)
+4. [Giai đoạn 3: Khối Cốt Lõi - Temporal-Aware Block (TAB)](#4-giai-đoạn-3-khối-cốt-lõi---temporal-aware-block-tab)
+5. [Giai đoạn 4: Điểm mới - Cơ chế Nơ-ron Xung LIF (Spiking Attention at F)](#5-giai-đoạn-4-điểm-mới---cơ-chế-nơ-ron-xung-lif-spiking-attention-at-f)
+6. [Giai đoạn 5: Hợp nhất Đa Thang Đo Thời Gian (Dynamic Multi-Scale Fusion)](#6-giai-đoạn-5-hợp-nhất-đa-thang-đo-thời-gian-dynamic-multi-scale-fusion)
+7. [Giai đoạn 6: Phân loại Cảm xúc Đầu ra (Classifier)](#7-giai-đoạn-6-phân-loại-cảm-xúc-đầu-ra-classifier)
+8. [Chiến lược Huấn luyện & Đánh giá (Training Strategy)](#8-chiến-lược-huấn-luyện--đánh-giá-training-strategy)
+9. [Bảng tóm tắt Kích thước Tensor (Shape Tracking) qua từng tầng](#9-bảng-tóm-tắt-kích-thước-tensor-shape-tracking-qua-từng-tầng)
 
 ---
 
-## 2. CHI TIẾT KIẾN TRÚC MÔ HÌNH (END-TO-END)
+## 1. BỨC TRANH TỔNG THỂ & LUỒNG DỮ LIỆU (END-TO-END DATA FLOW)
 
-Kiến trúc gồm 4 khối liên hoàn:
+Mô hình hoạt động theo nguyên lý biến đổi một đoạn tín hiệu âm thanh liên tục (Continuous Audio Waveform) thành phân phối xác suất của 8 cảm xúc rời rạc thông qua sơ đồ khối dưới đây:
 
 ```
-[Input Pipeline] ──► [2 Luồng Xuôi/Ngược] ──► [Dynamic Fusion] ──► [Classifier]
-  (Speech → MFCC)         (Chuỗi khối TAB)       (Gộp đa thang đo)     (FC + Softmax)
+[Audio Waveform (.wav)] 
+       │ (Tần số lấy mẫu 22.050 Hz)
+       ▼
+┌────────────────────────────────────────────────────────┐
+│ GIAI ĐOẠN 1: INPUT PIPELINE                            │
+│ - Chuẩn hóa độ dài: 110.000 mẫu (~5s cho RAVDESS)      │
+│ - Trích xuất 39 đặc trưng tĩnh MFCC                    │
+│ ➔ Ma trận đặc trưng: Shape (Batch, 215, 39)           │
+└────────────────────────────────────────────────────────┘
+       │
+       ├────────────────────────────────────────┐
+       ▼ (Luồng Xuôi)                           ▼ (Luồng Ngược)
+┌──────────────────────────────┐         ┌──────────────────────────────┐
+│ GIAI ĐOẠN 2A: FORWARD STREAM │         │ GIAI ĐOẠN 2B: REVERSE STREAM │
+│ - 1x1 Conv chiếu kênh        │         │ - Đảo ngược thời gian        │
+│ - 8 khối TAB (Dilation: 1→128)         │ - 1x1 Conv chiếu kênh        │
+│ ➔ Đặc trưng xuôi: F_fwd_i    │         │ - 8 khối TAB (Dilation: 1→128)
+└──────────────┬───────────────┘         │ ➔ Đặc trưng ngược: F_bwd_i   │
+               │                         └──────────────┬───────────────┘
+               └───────────────────┬────────────────────┘
+                                   │ (Cộng hai chiều: F_fwd_i ⊕ F_bwd_i)
+                                   ▼
+┌────────────────────────────────────────────────────────┐
+│ GIAI ĐOẠN 3: TỔNG HỢP ĐA THANG ĐO (DYNAMIC FUSION)      │
+│ - Global Average Pooling tạo 8 vector đại diện {g_i}   │
+│ - WeightLayer: Tự học trọng số kết hợp w_i             │
+│ ➔ Vector ngữ cảnh toàn cục: Shape (Batch, 39)          │
+└────────────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────┐
+│ GIAI ĐOẠN 4: CLASSIFIER (PHÂN LOẠI)                    │
+│ - Fully Connected (Dense 39 ➔ 8)                       │
+│ - Softmax: Xuất xác suất của 8 cảm xúc                 │
+└────────────────────────────────────────────────────────┘
 ```
-
-### 2.1. Khối 1: Input Pipeline
-* **Đầu vào âm thanh thô (`Speech`):** Sóng âm thanh dạng sóng `.wav` (tần số lấy mẫu $fs = 22.050\text{ Hz}$).
-* **Cân bằng độ dài (Length Normalization):** Chuẩn hóa độ dài tín hiệu về cố định theo dataset (RAVDESS là `110.000` mẫu ~ 5 giây). Ngắn hơn thì đệm thêm số 0 ở 2 đầu (`Zero-padding`), dài hơn thì cắt đều 2 đầu.
-* **Trích xuất MFCC 39 chiều:**
-  * Cắt khung ngắn $50\text{ ms}$, bước trượt $12.5\text{ ms}$.
-  * Nhân cửa sổ Hamming $\to$ Biến đổi Fourier (FFT) $\to$ Bộ lọc thang tần số Mel $\to$ Biến đổi Cosin rời rạc (DCT) lấy 39 hệ số đầu tiên.
-* **Kích thước đầu ra:** Ma trận shape $(215, 39)$ — gồm **215 khung thời gian**, mỗi khung có **39 đặc trưng tần số**.
-* **Ý nghĩa biểu đồ `Class-Confusion` (t-SNE):** Đặc trưng MFCC ban đầu bị trộn lẫn hỗn độn, chứng minh bản thân MFCC tĩnh chưa thể tự phân loại cảm xúc mà cần mạng thời gian phía sau bóc tách.
-
-### 2.2. Khối 2: TIM-Net Core & Khối Temporal-Aware Block (TAB)
-* Đầu vào được tách thành **2 nhánh**:
-  * Nhánh xuôi (Forward): đi qua $1\times 1$ Conv $\to$ chuỗi khối $\vec{\mathcal{T}}_1, \dots, \vec{\mathcal{T}}_n$.
-  * Nhánh ngược (Reverse Time): lật ngược trục thời gian $\to$ qua $1\times 1$ Conv $\to$ chuỗi khối $\overleftarrow{\mathcal{T}}_1, \dots, \overleftarrow{\mathcal{T}}_n$.
-* **Bên trong mỗi khối TAB (Temporal-Aware Block):**
-  $$\vec{F}_{n-1} \longrightarrow [\text{DC Conv} \to \text{BN} \to \text{ReLU} \to \text{SD}] \times 2 \longrightarrow \sigma \longrightarrow \odot \vec{F}_{n-1} \longrightarrow \vec{F}_n$$
-  * **DC Conv (Dilated Causal Conv):** Tích chập giãn nở theo luật nhân quả. Hệ số giãn nở tăng dần $d = 2^{i-1}$ ($1, 2, 4, 8, 16, 32, 64, 128$), giúp mở rộng vùng tiếp nhận (receptive field) bao phủ toàn bộ câu nói mà không làm tăng số tham số.
-  * **BN (Batch Normalization):** Chuẩn hóa lô giúp ổn định tốc độ học.
-  * **ReLU:** Hàm phi tuyến tính cho mạng học đặc trưng âm học sâu.
-  * **SD (Spatial Dropout 1D):** Tắt ngẫu nhiên 10% các kênh đặc trưng trên toàn bộ trục thời gian để chống học vẹt (overfitting).
-  * **Cổng chú ý $\sigma$ (Sigmoid):** Tính trọng số chú ý để nhân phần tử ($\odot$) với $\vec{F}_{n-1}$ tạo ra $\vec{F}_n$.
-
-### 2.3. Khối 3: Dynamic Fusion (Hợp nhất Đa thang đo Thời gian)
-* Sau mỗi tầng thời gian thứ $i$, đặc trưng xuôi và ngược được cộng lại: $\vec{F}_i \oplus \overleftarrow{F}_i$.
-* Đưa qua `GlobalAveragePooling1D` để nén thành vector $g_i$.
-* Gom tất cả $n$ vector $\{g_1, g_2, \dots, g_n\}$ lại, đưa qua tầng tự định nghĩa **`WeightLayer`** để tự động học trọng số kết hợp thành vector đại diện duy nhất $g_{drt}$.
-
-### 2.4. Khối 4: Classifier (Phân loại Cảm xúc)
-* Vector $g_{drt}$ đi qua tầng `Dense` + `Softmax` xuất ra xác suất của 8 lớp cảm xúc.
-* **Ý nghĩa biểu đồ `Class-Discriminative` (t-SNE):** Sau khi qua TIM-Net, 8 cụm cảm xúc đã được tách biệt rõ ràng.
 
 ---
 
-## 3. ĐIỂM MỚI: CẢI TIẾN NƠ-RON XUNG LIF (SPIKING ATTENTION AT F)
+## 2. GIAI ĐOẠN 1: INPUT PIPELINE & TRÍCH XUẤT ĐẶC TRƯNG MFCC
 
-### 3.1. Động lực nghiên cứu (Research Motivation)
-* **Tính sinh học (Neuromorphic):** Tai người chuyển đổi sóng âm thành các chuỗi xung thần kinh (spikes) truyền lên não.
-* **Lọc nhiễu & Dập tắt khoảng lặng (Sparsity):** Trong câu nói có nhiều khoảng lặng/tiếng thở. Bản gốc dùng `Sigmoid` mềm ($0.0 \to 1.0$) vẫn giữ lại năng lượng rác làm loãng đặc trưng. Nơ-ron xung sẽ **dập tắt hoàn toàn về 0**, chỉ bắn **xung 1** khi có cảm xúc mạnh.
-* **Tiết kiệm năng lượng (Energy Efficiency):** Giảm chi phí tính toán lý thuyết nhờ độ thưa của xung.
+### 2.1. Bản chất vật lý của tín hiệu âm thanh
+* File âm thanh `.wav` lưu trữ biên độ dao động sóng âm theo thời gian với tần số lấy mẫu $fs = 22.050\text{ Hz}$ (tức mỗi giây ghi lại 22.050 con số thực).
+* **Vấn đề:** Dữ liệu sóng âm thô (Waveform) có kích thước quá lớn, chứa nhiều thông tin pha và dao động vi mô không phản ánh trực tiếp cảm xúc của con người.
 
-### 3.2. Cơ chế toán học của Nơ-ron LIF (Leaky Integrate-and-Fire)
-Tại vị trí cổng $F$, tín hiệu đi qua phương trình điện thế màng tế bào theo thời gian $t$:
-$$V(t) = \tau \cdot V(t-1) \cdot (1 - S(t-1)) + I(t)$$
-$$S(t) = \text{Heaviside}(V(t) - V_{th}) = \begin{cases} 1.0 & \text{khi } V(t) \ge V_{th} \quad (\text{Bắn xung, cổng mở}) \\ 0.0 & \text{khi } V(t) < V_{th} \quad (\text{Không xung, cổng đóng}) \end{cases}$$
+### 2.2. Đồng bộ hóa độ dài tín hiệu (Length Normalization)
+Mỗi câu nói có độ dài khác nhau. Mạng nơ-ron bắt buộc phải có kích thước đầu vào đồng nhất:
+* Trong code ([`extract_feature.py`](file:///home/thanhbinh/Downloads/TIM-Net_SER-main/Code/extract_feature.py)), tác giả quy định `mean_signal_length = 110.000` mẫu đối với tập **RAVDESS** (tương đương khoảng $5.0$ giây).
+* **Nếu câu ngắn hơn 110.000 mẫu:** Đệm thêm các số $0$ cân đối vào hai đầu (`Zero-padding`).
+* **Nếu câu dài hơn 110.000 mẫu:** Cắt bớt phần thừa ở hai đầu, giữ lại đoạn âm thanh ở giữa.
 
-* $\tau$ (Decay rate): Hệ số rò rỉ điện thế (mặc định $0.85$).
-* $V_{th}$ (Threshold): Ngưỡng kích hoạt phát xung (mặc định $0.5$).
-* $(1 - S(t-1))$: Cơ chế **Hard Reset** — nếu bước trước vừa bắn xung thì điện thế xả về 0.
+### 2.3. Quy trình toán học trích xuất MFCC 39 chiều
+1. **Phân khung (Framing):** Chia tín hiệu thành các khung nhỏ có độ dài $50\text{ ms}$ (tương ứng 1102 mẫu) với bước trượt $12.5\text{ ms}$ (275 mẫu).
+   * *Ý nghĩa vật lý:* Tín hiệu tiếng nói biến thiên liên tục (non-stationary), nhưng trong khoảng cực ngắn $50\text{ ms}$, cấu trúc thanh quản con người được coi là ổn định cục bộ (quasi-stationary).
+2. **Cửa sổ hóa (Windowing):** Nhân từng khung với hàm cửa sổ Hamming $w(n) = 0.54 - 0.46 \cos\left(\frac{2\pi n}{N-1}\right)$ để làm mượt biên hai đầu, tránh hiện tượng rò rỉ phổ tần số (spectral leakage).
+3. **Biến đổi Fourier nhanh (STFT/FFT):** Chuyển từng khung từ miền thời gian sang miền tần số, tính toán phổ công suất (Power Spectrum).
+4. **Dải lọc thang đo Mel (Mel Filterbank):** Tai người nghe âm thanh phi tuyến tính (nhạy với âm trầm hơn âm bổng). Ta chiếu năng lượng qua dải lọc Mel:
+   $$m = 2595 \log_{10}\left(1 + \frac{f}{700}\right)$$
+5. **Log Năng lượng & Biến đổi Cosin rời rạc (DCT):** Nén năng lượng phổ và giữ lại đúng **39 hệ số đầu tiên** ($n\_mfcc = 39$).
+6. **Chuyển vị ma trận (Transpose):** Kết quả ban đầu từ thư viện librosa có dạng $(39, 215)$. Sau khi chuyển vị `np.transpose`, ma trận có dạng chuẩn:
+   $$\mathbf{X} \in \mathbb{R}^{215 \times 39}$$
+   *(215 bước thời gian, 39 đặc trưng tần số).*
 
-### 3.3. Kỹ thuật Surrogate Gradient (Giải quyết bài toán đứt gãy đạo hàm)
-* **Vấn đề:** Hàm bước nhảy Heaviside có đạo hàm bằng 0 khắp nơi $\to$ Backpropagation bị đứt gãy, mạng không học được.
-* **Giải pháp:** Sử dụng hàm **Fast Sigmoid** làm đạo hàm đại diện khi lan truyền ngược:
+### 2.4. Ý nghĩa biểu đồ t-SNE `Class-Confusion` (Góc dưới bên trái)
+Khi chiếu các vector MFCC ban đầu xuống không gian 2 chiều bằng thuật toán t-SNE:
+* Tất cả 8 màu đại diện cho 8 cảm xúc bị **trộn lẫn hoàn toàn (Entangled)**.
+* **Kết luận khoa học:** Bản thân đặc trưng MFCC tĩnh hoàn toàn không thể phân loại được cảm xúc nếu không có kiến trúc bóc tách ngữ cảnh thời gian ở phía sau.
+
+---
+
+## 3. GIAI ĐOẠN 2: TÁCH HAI LUỒNG THỜI GIAN XUÔI - NGƯỢC (BI-DIRECTIONAL STREAM)
+
+### 3.1. Tại sao phải xử lý hai chiều thời gian?
+Trong giao tiếp, cảm xúc của câu nói không chỉ phụ thuộc vào những từ đã nói trước đó, mà ngữ điệu ở **cuối câu** (ví dụ: lên giọng bất ngờ, ngắt giọng đột ngột) thường quyết định tính chất cảm xúc của toàn bộ câu. Xử lý cả hai chiều giúp mạng nắm bắt trọn vẹn cả **ngữ cảnh quá khứ lẫn tương lai**.
+
+### 3.2. Triển khai trong mã nguồn ([`Code/TIMNET.py`](file:///home/thanhbinh/Downloads/TIM-Net_SER-main/Code/TIMNET.py))
+* **Luồng xuôi (Forward):** Nhận trực tiếp đầu vào $X$ có shape $(B, 215, 39)$.
+* **Luồng ngược (Backward):** Đảo ngược theo trục thời gian bằng tầng Lambda:
+  ```python
+  backward = Lambda(lambda x: K.reverse(x, axes=1))(inputs)
+  ```
+* **Tầng chiếu khởi tạo $1\times 1$ Conv:** Cả hai luồng đi qua một tầng tích chập $1\times 1$ để chuẩn hóa số kênh về `nb_filters = 39`:
+  ```python
+  forward_convd = Conv1D(filters=39, kernel_size=1, padding='causal')(forward)
+  backward_convd = Conv1D(filters=39, kernel_size=1, padding='causal')(backward)
+  ```
+
+---
+
+## 4. GIAI ĐOẠN 3: KHỐI CỐT LÕI - TEMPORAL-AWARE BLOCK (TAB)
+
+Khối TAB là trái tim của kiến trúc TIM-Net, được lặp lại 8 lần tương ứng với 8 mức độ giãn nở thời gian:
+
+$$\vec{F}_{n-1} \longrightarrow \underbrace{[\text{DC Conv} \to \text{BN} \to \text{ReLU} \to \text{SD}] \times 2}_{\text{Trích xuất chuỗi thời gian}} \longrightarrow \sigma \longrightarrow \odot \vec{F}_{n-1} \longrightarrow \vec{F}_n$$
+
+### 4.1. Tích chập Giãn nở Nhân quả (Dilated Causal Convolution - DC Conv)
+* **Luật nhân quả (Causal):** Đầu ra tại thời điểm $t$ chỉ được tính toán dựa trên các thời điểm hiện tại và quá khứ ($\le t$), hoàn toàn không bị rò rỉ thông tin tương lai.
+* **Hệ số giãn nở (Dilation Rate $d$):** Ở khối thứ $i$ ($i = 1, \dots, 8$), hệ số giãn nở tăng theo cấp số nhân:
+  $$d_i = 2^{i-1} \in \{1, 2, 4, 8, 16, 32, 64, 128\}$$
+* **Cơ chế hoạt động:** Thay vì trượt kernel trên các khung liền kề, tích chập giãn nở bỏ cách $d-1$ điểm dữ liệu.
+* **Vùng tiếp nhận (Receptive Field - RF):**
+  $$RF_i = 1 + \sum_{k=1}^i (K - 1) \cdot d_k$$
+  *(Với kích thước kernel $K = 2$).*
+  * Ở khối 1 ($d=1$): Mạng chỉ nhìn thấy ngữ cảnh cực ngắn (vài phần mười mili-giây, cấp độ âm vị).
+  * Ở khối 8 ($d=128$): Vùng tiếp nhận mở rộng bao phủ toàn bộ 215 khung thời gian ($5$ giây câu nói).
+  * **Ưu điểm vượt trội:** Mở rộng vùng quan sát cực đại mà số lượng tham số mô hình **không tăng thêm một tham số nào**!
+
+### 4.2. Chuẩn hóa Lô (Batch Normalization - BN)
+Chuẩn hóa giá trị kích hoạt qua từng batch, giúp giảm thiểu hiện tượng dịch chuyển hiệp biến nội tại (Internal Covariate Shift), cho phép mạng hội tụ nhanh và ổn định.
+
+### 4.3. Kích hoạt Phi tuyến ReLU
+Giữ nguyên giá trị dương và triệt tiêu giá trị âm, giúp mạng học được các hàm quan hệ phi tuyến tính phức tạp trong đặc trưng âm thanh.
+
+### 4.4. Spatial Dropout 1D (SD)
+* Khác với Dropout thông thường (chỉ tắt ngẫu nhiên từng nơ-ron đơn lẻ), **Spatial Dropout 1D tắt ngẫu nhiên nguyên cả một kênh đặc trưng trên toàn bộ 215 bước thời gian** (tỷ lệ tắt $10\%$).
+* **Lý do sử dụng:** Trong âm thanh, các khung thời gian sát nhau có tương quan rất cao. Nếu chỉ tắt 1 điểm nơ-ron, mô hình vẫn dễ dàng nhìn lén thông tin từ điểm bên cạnh. Tắt toàn bộ kênh ép mô hình phải học phân tán đều, chống học vẹt (overfitting) cực kỳ hiệu quả.
+
+---
+
+## 5. GIAI ĐOẠN 4: ĐIỂM MỚI - CƠ CHẾ NƠ-RON XUNG LIF (SPIKING ATTENTION AT F)
+
+Đây là **đóng góp khoa học trọng tâm** của đề tài cải tiến.
+
+### 5.1. So sánh giữa Bản gốc và Bản cải tiến Spiking
+
+* **Bản gốc (Sigmoid Gating mềm):**
+  $$A = \sigma(\text{Conv}) \in [0.0, 1.0]$$
+  $$F = \vec{F}_{n-1} \odot A$$
+  *Điểm yếu:* Giá trị $A$ luôn là số thực liên tục ($0.1, 0.2, 0.3,...$). Do đó, các đoạn khoảng lặng, tiếng thở, tạp âm nền vẫn giữ lại một phần năng lượng đi vào các tầng sau, làm loãng đặc trưng cảm xúc.
+
+* **Bản cải tiến (Spike-driven Gating nhị phân):**
+  $$S = \text{LIF\_Spike}(A) \in \{0.0, 1.0\}$$
+  $$F = \vec{F}_{n-1} \odot S$$
+  *Ưu thế vượt trội:* Cổng trở thành một chiếc công tắc nhị phân. Các đoạn không chứa cảm xúc bị **dập tắt tuyệt đối về 0**, chỉ những khoảnh khắc năng lượng cảm xúc bộc lộ mạnh mẽ mới kích hoạt **xung 1** cho tín hiệu đi qua.
+
+### 5.2. Phương trình toán học Nơ-ron LIF (Leaky Integrate-and-Fire)
+Mô phỏng chính xác màng tế bào thần kinh sinh học:
+1. **Tích lũy & Rò rỉ điện thế (Leaky Integration):**
+   $$V(t) = \tau \cdot V(t-1) \cdot (1 - S(t-1)) + I(t)$$
+   * $I(t) = \sigma(\text{Conv}_t)$: Dòng kích thích đầu vào từ tầng tích chập.
+   * $\tau = 0.85$: Hệ số rò rỉ điện thế màng theo thời gian.
+   * $(1 - S(t-1))$: Cơ chế **Hard Reset** — nếu bước trước nơ-ron vừa bắn xung ($S=1$), điện thế lập tức xả về 0.
+2. **Kích hoạt phát xung (Firing Mechanism):**
+   $$S(t) = \text{Heaviside}(V(t) - V_{th}) = \begin{cases} 1.0 & \text{khi } V(t) \ge V_{th} \quad (V_{th} = 0.5) \\ 0.0 & \text{khi } V(t) < V_{th} \end{cases}$$
+
+### 5.3. Kỹ thuật Đạo hàm Đại diện (Surrogate Gradient)
+Hàm bước nhảy Heaviside có đạo hàm bằng 0 ở khắp mọi nơi (không khả vi), khiến thuật toán lan truyền ngược (Backpropagation) không thể cập nhật trọng số. Ta giải quyết bằng hàm **Fast Sigmoid Surrogate Gradient**:
+* **Khi truyền xuôi (Forward):** Vẫn bắn xung nhị phân $0$ hoặc $1$ chuẩn xác.
+* **Khi truyền ngược (Backward):** Đạo hàm được tính xấp xỉ bằng:
   $$\frac{\partial S}{\partial V} \approx \frac{1}{(1 + \alpha |V - V_{th}|)^2} \quad (\alpha = 10.0)$$
-  * *Chiều xuôi (Forward):* Vẫn bắn xung nhị phân 0 hoặc 1 chuẩn xác.
-  * *Chiều ngược (Backward):* Gradient truyền qua bình thường để cập nhật trọng số.
+  Giúp dòng gradient chảy mượt mà qua nơ-ron xung về các tầng trước để cập nhật trọng số.
 
 ---
 
-## 4. CÁC CHỈ SỐ ĐÁNH GIÁ KẾT QUẢ (EVALUATION METRICS)
+## 6. GIAI ĐOẠN 5: HỢP NHẤT ĐA THANG ĐO THỜI GIAN (DYNAMIC MULTI-SCALE FUSION)
 
-| Chỉ số | Ý nghĩa | Công thức |
-| :--- | :--- | :--- |
-| **Precision** | Trong các mẫu đoán là cảm xúc X, có bao nhiêu % đúng thật? (Đoán chắc, ít báo động giả) | $\frac{TP}{TP + FP}$ |
-| **Recall** | Trong các mẫu thực tế là cảm xúc X, tìm ra được bao nhiêu %? (Không bỏ sót mẫu) | $\frac{TP}{TP + FN}$ |
-| **F1-Score** | Trung bình điều hòa giữa Precision và Recall (Đo lường toàn diện) | $2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}$ |
-| **Support** | Tổng số file âm thanh thực tế của cảm xúc đó có trong tập test. | Đếm số mẫu |
-| **Sparsity (%)** | Tỷ lệ phần trăm xung bằng 0 (Đo lường mức độ tiết kiệm năng lượng của SNN). | $\frac{\text{Số xung 0}}{\text{Tổng số xung}}$ |
-
----
-
-## 5. CẨM NANG KỸ THUẬT & XỬ LÝ LỖI KHI TRAIN TRÊN SERVER
-
-### 5.1. Nguyên tắc an toàn trên Server dùng chung
-1. **Luôn dùng môi trường ảo riêng:** `source ~/snn_project1/.venv/bin/activate` (Tuyệt đối không pip install toàn cục).
-2. **Kiểm tra GPU còn trống:** Gõ `nvidia-smi`, chọn GPU không có ai dùng.
-3. **Cấu hình GPU an toàn:** Đảm bảo `config.gpu_options.allow_growth = True` để không chiếm dụng hết VRAM của người khác.
-
-### 5.2. Các lỗi kinh điển và cách xử lý
-* **Lỗi `UnpicklingError: pickle data was truncated`:** File `RAVDE.npy` bị tải đứt đoạn (chỉ có 1MB thay vì 47MB). Cách sửa: kéo thả lại file 47MB chuẩn lên server.
-* **Lỗi `Autotuner could not compile any configs for HLO (Triton/XLA)`:** Xảy ra trên các dòng card mới như **RTX PRO 6000 Blackwell (sm_120)** do trình JIT chưa tương thích. Cách sửa:
-  * Thêm `jit_compile = False` vào `self.model.compile()` trong `Model.py`.
-  * Thêm `tf.config.optimizer.set_jit(False)` vào `main.py`.
-  * Export biến môi trường: `export XLA_FLAGS="--xla_gpu_enable_triton_gemm=false"`.
+Sau khi đi qua 8 khối TAB ở 2 luồng:
+1. Tại mỗi thang đo $i \in \{1, \dots, 8\}$, đặc trưng xuôi và ngược được cộng gộp:
+   $$F_i = \vec{F}_i \oplus \overleftarrow{F}_i \quad \in \mathbb{R}^{B \times 215 \times 39}$$
+2. Nén toàn bộ 215 khung thời gian bằng tầng `GlobalAveragePooling1D` thành vector tóm tắt $g_i$:
+   $$g_i = \text{GAP1D}(F_i) \quad \in \mathbb{R}^{B \times 1 \times 39}$$
+3. Ghép nối 8 vector đại diện từ 8 thang đo:
+   $$\mathbf{G} = [g_1, g_2, \dots, g_8] \quad \in \mathbb{R}^{B \times 8 \times 39}$$
+4. **Tầng tự định nghĩa `WeightLayer`:**
+   * Tác giả không dùng trung bình cộng đơn giản, mà tạo một ma trận trọng số có thể học $\mathbf{W} \in \mathbb{R}^{8 \times 1}$.
+   * Thực hiện phép nhân Dot Product để tự động điều chỉnh tầm quan trọng của từng thang đo:
+     $$g_{drt} = \mathbf{G}^T \cdot \mathbf{W} \quad \in \mathbb{R}^{B \times 39}$$
+   * Thang đo thời gian nào chứa nhiều thông tin cảm xúc nhất sẽ tự động được gán trọng số lớn nhất.
 
 ---
 
-## 6. LỆNH CHẠY THỰC NGHIỆM ĐỐI CHỨNG (BENCHMARK)
+## 7. GIAI ĐOẠN 6: PHÂN LOẠI CẢM XÚC ĐẦU RA (CLASSIFIER)
 
-Di chuyển vào thư mục code:
-```bash
-cd ~/snn_project1/SER/TIM-Net_SER-main/Code
-```
+Vector đại diện cuối cùng $g_{drt}$ (kích thước 39 chiều) được đưa vào bộ phân loại:
+1. **Tầng Fully Connected (Dense):** Chiếu từ 39 chiều sang 8 chiều tương ứng với 8 lớp cảm xúc.
+2. **Hàm Softmax:** Chuyển đổi điểm số logit thành phân phối xác suất:
+   $$P(y = c \mid x) = \frac{e^{z_c}}{\sum_{j=1}^8 e^{z_j}}$$
+3. **Cảm xúc dự đoán:** Là lớp có xác suất cao nhất:
+   $$\hat{y} = \arg\max_{c} P(y = c \mid x)$$
 
-### 6.1. Chạy mô hình cải tiến LIF Spiking (Mô hình đề xuất):
-```bash
-nohup python main.py --mode train --data RAVDE --split_fold 10 --random_seed 46 --epoch 500 --gpu 0 --use_spike True --tau 0.85 --threshold 0.5 > train_lif_500.log 2>&1 &
-```
-
-### 6.2. Chạy mô hình Baseline gốc (Để lấy số liệu so sánh đối chứng):
-```bash
-nohup python main.py --mode train --data RAVDE --split_fold 10 --random_seed 46 --epoch 500 --gpu 0 --use_spike False > train_base_500.log 2>&1 &
-```
-
-### 6.3. Kiểm tra tiến trình đang chạy ngầm:
-```bash
-tail -f train_lif_500.log
-```
+### Ý nghĩa biểu đồ `Class-Discriminative` (Góc dưới bên phải)
+Khi chiếu vector $g_{drt}$ xuống không gian 2D bằng t-SNE:
+* 8 cụm cảm xúc (*Angry, Calm, Disgust, Fear, Happy, Neutral, Sad, Surprise*) đã được **gom cụm tách biệt hoàn toàn thành từng ốc đảo riêng biệt**.
+* Chứng minh mô hình đã học thành công các biểu diễn đặc trưng phân biệt cảm xúc rõ ràng.
 
 ---
 
-*Tài liệu này được biên soạn bởi ThanhBinngoc phục vụ nghiên cứu và phát triển mô hình Spiking-TIM-Net.*
+## 8. CHIẾN LƯỢC HUẤN LUYỆN & ĐÁNH GIÁ (TRAINING STRATEGY)
+
+1. **Hàm mất mát (Loss Function):** Sử dụng Categorical Cross-Entropy kết hợp **Label Smoothing (factor = 0.1)**.
+   $$y_{\text{smooth}} = y \cdot (1 - \alpha) + \frac{\alpha}{K} \quad (\alpha = 0.1, K = 8)$$
+   *Tác dụng:* Ngăn chặn mô hình trở nên quá tự tin vào một nhãn duy nhất, giảm thiểu hiện tượng quá khớp (overfitting).
+2. **Thuật toán tối ưu (Optimizer):** Adam với tốc độ học $\text{lr} = 0.001$, $\beta_1 = 0.93$, $\beta_2 = 0.98$, $\epsilon = 10^{-8}$.
+3. **Phương pháp kiểm thử (Cross-Validation):** Đánh giá theo **10-fold Cross-Validation** (chia dữ liệu thành 10 phần, lần lượt dùng 9 phần để train và 1 phần để test độc lập, lấy trung bình cộng).
+
+---
+
+## 9. BẢNG TÓM TẮT KÍCH THƯỚC TENSOR (SHAPE TRACKING) QUA TỪNG TẦNG
+
+Giả sử batch size $B = 64$ trên tập dữ liệu **RAVDESS**:
+
+| Thứ tự | Tên tầng / Thao tác | Kích thước Tensor đầu ra (Output Shape) | Ý nghĩa |
+| :---: | :--- | :---: | :--- |
+| **0** | Audio Waveform gốc | $(64, 110000)$ | Sóng âm 5 giây ($fs = 22050$) |
+| **1** | Sau Input Pipeline (MFCC) | $(64, 215, 39)$ | 215 khung thời gian, 39 đặc trưng |
+| **2** | Nhánh Xuôi ($1\times 1$ Conv) | $(64, 215, 39)$ | Chuẩn hóa kênh luồng xuôi |
+| **3** | Nhánh Ngược (Reverse + $1\times 1$ Conv) | $(64, 215, 39)$ | Đảo ngược thời gian luồng ngược |
+| **4** | Khối TAB thứ $i$ ($d = 1 \to 128$) | $(64, 215, 39)$ | Trích xuất đặc trưng thời gian mở rộng |
+| **5** | LIF Spiking Gating | $(64, 215, 39)$ | Xung nhị phân đóng/mở cổng $\{0, 1\}$ |
+| **6** | Đầu ra TAB: $F = \vec{F}_{n-1} \odot S$ | $(64, 215, 39)$ | Đặc trưng đã lọc sạch khoảng lặng |
+| **7** | Cộng hai luồng: $\vec{F}_i \oplus \overleftarrow{F}_i$ | $(64, 215, 39)$ | Tích hợp thông tin xuôi và ngược |
+| **8** | Global Average Pooling 1D | $(64, 1, 39)$ | Nén 215 khung thành 1 vector đại diện |
+| **9** | Gom 8 thang đo (Concatenate) | $(64, 8, 39)$ | Ma trận 8 thang đo thời gian |
+| **10** | WeightLayer Dot Product | $(64, 39)$ | Vector ngữ cảnh toàn cục tối ưu $g_{drt}$ |
+| **11** | Dense + Softmax | $(64, 8)$ | Xác suất của 8 lớp cảm xúc đầu ra |
+
+---
+
+*Tài liệu được tổng hợp chi tiết nhằm phục vụ công tác nghiên cứu, thực nghiệm và bảo vệ đồ án của tác giả ThanhBinngoc.*
